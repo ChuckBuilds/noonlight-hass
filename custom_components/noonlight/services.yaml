@@ -4,6 +4,7 @@
 # This integration exposes:
 #
 #   noonlight.create_alarm
+#   noonlight.cancel_alarm
 #
 # This fork extends the original integration with:
 #
@@ -94,3 +95,26 @@ create_alarm:
       example: "Initial alarm setup, please call so client can verify everything is working."
       selector:
         text:
+
+cancel_alarm:
+  name: Cancel Alarm
+  description: >-
+    Cancel an active Noonlight alarm. Uses the same endpoint (sandbox or
+    production) and token that created it. Fires noonlight_alarm_canceled on
+    success or noonlight_alarm_failed (action: cancel) on failure.
+
+  fields:
+    alarm_id:
+      name: Alarm ID
+      description: Alarm to cancel. Defaults to the most recently created alarm.
+      required: false
+      selector:
+        text:
+
+    pin:
+      name: PIN
+      description: PIN Noonlight verifies before cancelling. Defaults to the configured PIN.
+      required: false
+      selector:
+        text:
+          type: password

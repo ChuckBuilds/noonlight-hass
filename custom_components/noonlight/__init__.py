@@ -63,9 +63,12 @@ from .const import (
     ATTR_ALARM_CAUSE,
     ATTR_INSTRUCTIONS,
     CONST_ALARM_STATUS_ACTIVE,
+    CONST_ALARM_STATUS_CANCELED,
+    CONST_NOONLIGHT_HA_SERVICE_CANCEL_ALARM,
     CONST_NOONLIGHT_HA_SERVICE_CREATE_ALARM,
     CONST_NOONLIGHT_SERVICE_TYPES,
     DOMAIN,
+    EVENT_NOONLIGHT_ALARM_CANCELED,
     EVENT_NOONLIGHT_ALARM_CREATED,
     EVENT_NOONLIGHT_TOKEN_REFRESHED,
     PLATFORMS,
@@ -216,6 +219,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         DOMAIN, CONST_NOONLIGHT_HA_SERVICE_CREATE_ALARM, handle_create_alarm_service
     )
 
+    async def handle_cancel_alarm_service(call):
+        """Cancel a Noonlight alarm from a Home Assistant service call.
+
+        This is the Home Assistant service entry point for automations/scripts:
+        ``noonlight.cancel_alarm``. Defaults to the most recently created alarm
+        and the configured PIN.
+        """
+        await noonlight_integration.cancel_alarm(
+            alarm_id=call.data.get("alarm_id"),
+            pin=call.data.get(CONF_PIN),
+        )
+
+    hass.services.async_register(
+        DOMAIN, CONST_NOONLIGHT_HA_SERVICE_CANCEL_ALARM, handle_cancel_alarm_service
+    )
+
     async def handle_noonlight_webhook(hass, webhook_id, request):
         """Receive Noonlight webhook events and forward them to Home Assistant.
 
@@ -294,6 +313,12 @@ class NoonlightIntegration:
         # Last alarm object returned by the Noonlight client. This is used for
         # status checks and for adding a secondary person on dispatch alarms.
         self._alarm = None
+
+        # alarm_id -> (api_endpoint, token) used to create that alarm, so a
+        # cancel goes to the same environment (sandbox or production) with the
+        # same credentials. Kept in memory only; after a restart cancel falls
+        # back to the configured endpoint and a freshly renewed token.
+        self._alarm_routes = {}
 
         # Renew when less than two hours remain if a caller uses non-forced
         # token checking. Dispatch calls force renewal before creating an alarm.
@@ -655,6 +680,7 @@ class NoonlightIntegration:
                 "alarm_id": getattr(self._alarm, "id", None),
                 "status": getattr(self._alarm, "status", None),
             }
+            self._alarm_routes[self._alarm.id] = (api_endpoint, self.client._token)
             async_dispatcher_send(self.hass, EVENT_NOONLIGHT_ALARM_CREATED)
             self._fire_noonlight_event(EVENT_NOONLIGHT_ALARM_CREATED, event_data)
 
@@ -674,3 +700,75 @@ class NoonlightIntegration:
             {**event_base, "error": msg},
         )
         return False
+
+    async def cancel_alarm(self, alarm_id=None, pin=None):
+        """Cancel a Noonlight alarm.
+
+        Posts ``{"status": "CANCELED", "pin": ...}`` to the Dispatch API
+        ``/alarms/{id}/status`` endpoint, using the same endpoint and token
+        that created the alarm.
+
+        Args:
+            alarm_id: Alarm to cancel. Defaults to the most recently created
+                alarm.
+            pin: PIN verified by Noonlight. Defaults to the configured PIN.
+
+        Fires ``noonlight_alarm_canceled`` on success, or
+        ``noonlight_alarm_failed`` with ``action: cancel`` on failure.
+        """
+        alarm_id = alarm_id or getattr(self._alarm, "id", None)
+        pin = pin or self.config.get(CONF_PIN)
+        api_endpoint, token = self._alarm_routes.get(alarm_id, (None, None))
+        api_endpoint = (api_endpoint or self.config.get(CONF_API_ENDPOINT, "")).strip()
+        is_sandbox = "api-sandbox.noonlight.com" in api_endpoint
+        is_production = "api.noonlight.com" in api_endpoint and not is_sandbox
+        event_base = {
+            "alarm_id": alarm_id,
+            "api_endpoint": api_endpoint,
+            "environment": "sandbox" if is_sandbox else "production" if is_production else "unknown",
+        }
+
+        def fail(msg):
+            _LOGGER.error(msg)
+            self._fire_noonlight_event(
+                EVENT_NOONLIGHT_ALARM_FAILED,
+                {**event_base, "action": "cancel", "error": msg},
+            )
+            return False
+
+        if not alarm_id:
+            return fail("No Noonlight alarm to cancel: no alarm_id given and none created since start.")
+
+        if token is None:
+            # Alarm created before a restart. Production can renew a token;
+            # a sandbox server token was never stored, so fail closed.
+            if is_sandbox:
+                return fail(
+                    "Cannot cancel sandbox alarm created before a restart: "
+                    "sandbox server token is not stored."
+                )
+            # Same token precedence as create_alarm: developer token if set.
+            token = self.config.get(CONF_DEV_TOKEN)
+            if not token:
+                if not await self.check_api_token(force_renew=True):
+                    return fail("Noonlight token renewal failed. Alarm was not cancelled.")
+                token = self.access_token
+
+        client = nl.NoonlightClient(token=token, session=self._websession)
+        client.set_base_url(api_endpoint)
+        body = {"status": CONST_ALARM_STATUS_CANCELED}
+        if pin:
+            body["pin"] = str(pin)
+
+        try:
+            await client._post(client.alarm_status_url.format(id=alarm_id), body)
+        except Exception as err:
+            _LOGGER.exception("Failed to cancel Noonlight alarm %s", alarm_id)
+            return fail(f"Failed to cancel Noonlight alarm: {type(err).__name__}: {err}")
+
+        self._alarm_routes.pop(alarm_id, None)
+
+        _LOGGER.info("Noonlight alarm %s cancelled (%s)", alarm_id, event_base["environment"])
+        async_dispatcher_send(self.hass, EVENT_NOONLIGHT_ALARM_CANCELED)
+        self._fire_noonlight_event(EVENT_NOONLIGHT_ALARM_CANCELED, event_base)
+        return True

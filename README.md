@@ -283,7 +283,11 @@ Fired when the external Noonlight service successfully creates an active alarm i
 
 ### `noonlight_alarm_failed`
 
-Fired when alarm creation fails.
+Fired when alarm creation fails. A failed `noonlight.cancel_alarm` also fires this event, with `action: cancel` and the `alarm_id`.
+
+### `noonlight_alarm_canceled`
+
+Fired when `noonlight.cancel_alarm` succeeds. Data: `alarm_id`, `api_endpoint`, `environment`.
 
 ### `noonlight_webhook_received`
 
@@ -331,6 +335,25 @@ server_token_override:
 This fork was designed to support automation-driven workflows where dispatch behavior, notification routing, testing modes, and safety protections are controlled externally by Home Assistant logic rather than hardcoded directly inside the integration.
 
 ## Service: `noonlight.create_alarm`
+
+## Service: `noonlight.cancel_alarm`
+
+Cancels an active alarm through the Dispatch API (`POST /alarms/{id}/status` with `status: CANCELED` and the PIN).
+
+| Field | Default | Notes |
+|---|---|---|
+| `alarm_id` | Most recently created alarm | The `alarm_id` from `noonlight_alarm_created` |
+| `pin` | Configured PIN | Noonlight verifies it before cancelling |
+
+The cancel is sent to the same endpoint, with the same token, that created the alarm, so a sandbox alarm is cancelled in the sandbox and a production alarm in production. This routing is kept in memory. After a Home Assistant restart, production alarms are cancelled with a freshly renewed token. Sandbox alarms created before the restart cannot be cancelled from Home Assistant, because the sandbox server token is not stored, and the call fails closed.
+
+```yaml
+action: noonlight.cancel_alarm
+data:
+  alarm_id: "{{ trigger.event.data.alarm_id }}"
+```
+
+Success fires `noonlight_alarm_canceled`; failure fires `noonlight_alarm_failed` with `action: cancel`. If the cancel fails, the alarm may still be active: answer Noonlight's call or text and give your PIN.
 
 ## Integration Information Entity
 
