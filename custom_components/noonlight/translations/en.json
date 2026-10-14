@@ -73,8 +73,8 @@
           "phone2": "Secondary Contact Phone"
         },
         "data_description": {
-          "phone": "Include the country code, e.g. 15555555555 for a US number.",
-          "phone2": "Include the country code, e.g. 15555555555 for a US number."
+          "phone": "Include the country code, e.g. 15555555555 for a US number. Only the format is checked, not whether the country code or number is valid.",
+          "phone2": "Include the country code, e.g. 15555555555 for a US number. Only the format is checked, not whether the country code or number is valid."
         }
       },
       "reconfig_v2_dispatch": {
@@ -83,8 +83,8 @@
           "phone2": "Secondary Contact Phone"
         },
         "data_description": {
-          "phone": "Include the country code, e.g. 15555555555 for a US number.",
-          "phone2": "Include the country code, e.g. 15555555555 for a US number."
+          "phone": "Include the country code, e.g. 15555555555 for a US number. Only the format is checked, not whether the country code or number is valid.",
+          "phone2": "Include the country code, e.g. 15555555555 for a US number. Only the format is checked, not whether the country code or number is valid."
         }
       }
     }

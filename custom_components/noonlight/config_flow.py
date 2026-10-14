@@ -65,7 +65,10 @@ def _validate_phones(user_input: dict[str, Any]) -> dict[str, str]:
     Noonlight's Dispatch API rejects a number without its country code (for
     example 8135550100) with "phone should be a supported phone format", so
     alarms fail at dispatch time. Catch that here instead: strip common
-    formatting and require 11-15 digits, e.g. 18135550100.
+    formatting and require 11-15 ASCII digits, e.g. 18135550100.
+
+    This checks the format only. It does not establish that the country code
+    or the number itself is valid.
 
     Blank values are allowed because these fields are optional.
     """
@@ -75,7 +78,9 @@ def _validate_phones(user_input: dict[str, Any]) -> dict[str, str]:
         if not value:
             continue
         digits = "".join(ch for ch in value if ch not in PHONE_FORMATTING_CHARACTERS)
-        if digits.isdigit() and 11 <= len(digits) <= 15:
+        # isdigit() alone also accepts non-ASCII numerals (e.g. Arabic-Indic or
+        # fullwidth digits); Noonlight needs plain 0-9.
+        if digits.isascii() and digits.isdigit() and 11 <= len(digits) <= 15:
             user_input[key] = digits
         else:
             errors[key] = "invalid_phone"
