@@ -1,0 +1,5 @@
+# Automated tests: mocked Noonlight API, no credentials needed.
+#   pip install -r requirements_test.txt && pytest tests
+homeassistant==2026.2.3
+noonlight==0.1.1
+pytest==9.1.1

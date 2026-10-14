@@ -354,7 +354,7 @@ data:
   alarm_id: "{{ trigger.event.data.alarm_id }}"
 ```
 
-**Events.** `noonlight_alarm_canceled` fires only when Noonlight confirms the cancellation (a 2xx response with `status: CANCELED`). Anything else, including token problems, fires `noonlight_alarm_failed` with `action: cancel` and the error. A failed cancel means the alarm may still be active: answer Noonlight's call or text and give your PIN.
+**Events.** `noonlight_alarm_canceled` fires only when Noonlight confirms the cancellation (a 2xx response with `status: CANCELED`). Anything else, including token problems and a token renewal or cancel request that takes longer than 20 seconds, fires `noonlight_alarm_failed` with `action: cancel` and the error. A failed cancel means the alarm may still be active: answer Noonlight's call or text and give your PIN.
 
 Disarming an alarm panel (Alarmo, manual, etc.) does **not** cancel a Noonlight dispatch. They are separate operations; only this action, confirmed by `noonlight_alarm_canceled`, cancels with Noonlight.
 
@@ -811,6 +811,17 @@ Advanced users may choose to integrate this fork alongside:
 Example workflows may include TEST vs LIVE dispatch modes, sandbox vs production endpoint separation, dispatch deduplication windows, family escalation sequencing, voice call escalation, SMS queueing, inbound webhook event handling, dashboard monitoring, and automated dispatch logging.
 
 This integration is intentionally designed to integrate cleanly with broader Home Assistant automation ecosystems.
+
+## Automated Tests
+
+`tests/` holds automated tests for `noonlight.cancel_alarm`. They run against a mocked Noonlight Dispatch API and token broker on localhost, so they need no credentials and make no real Noonlight calls. CI runs them on every push and pull request (`.github/workflows/tests.yml`).
+
+```bash
+pip install -r requirements_test.txt
+pytest tests
+```
+
+Live sandbox testing stays manual and separate: use your own developer credentials locally and never commit them.
 
 ## Recommended Testing Workflow
 

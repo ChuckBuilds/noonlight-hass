@@ -23,6 +23,7 @@ dispatch matches the runtime endpoint selected by the Home Assistant service
 call.
 """
 
+import asyncio
 import logging
 from datetime import timedelta
 
@@ -96,6 +97,10 @@ ALARM_ROUTES_STORAGE_VERSION = 1
 
 # A stored broker token with less than this left is renewed before a cancel.
 CANCEL_TOKEN_MIN_REMAINING = timedelta(minutes=5)
+
+# Upper bound for each network step of a cancel (token renewal, the cancel
+# request itself), so a hung connection reports failure instead of stalling.
+CANCEL_REQUEST_TIMEOUT = timedelta(seconds=20)
 
 
 # YAML configuration schema retained for import/backward compatibility. Newer
@@ -876,10 +881,12 @@ class NoonlightIntegration:
                     if token and expires and expires - dt_util.utcnow() > CANCEL_TOKEN_MIN_REMAINING:
                         return token
                 configured = self.config.get(CONF_TOKEN_ENDPOINT)
-                if not await self.check_api_token(
-                    force_renew=True,
-                    token_endpoint_override=token_endpoint if token_endpoint != configured else None,
-                ):
+                async with asyncio.timeout(CANCEL_REQUEST_TIMEOUT.total_seconds()):
+                    renewed = await self.check_api_token(
+                        force_renew=True,
+                        token_endpoint_override=token_endpoint if token_endpoint != configured else None,
+                    )
+                if not renewed:
                     return None
                 return self.access_token
             except Exception:
@@ -904,8 +911,15 @@ class NoonlightIntegration:
             client = nl.NoonlightClient(token=token, session=self._websession)
             client.set_base_url(api_endpoint)
             try:
-                response = await client._post(client.alarm_status_url.format(id=alarm_id), body)
+                async with asyncio.timeout(CANCEL_REQUEST_TIMEOUT.total_seconds()):
+                    response = await client._post(client.alarm_status_url.format(id=alarm_id), body)
                 break
+            except TimeoutError:
+                return fail(
+                    f"Noonlight did not answer the cancel within "
+                    f"{int(CANCEL_REQUEST_TIMEOUT.total_seconds())} s. The alarm may still be "
+                    "active: answer Noonlight's call or text and give your PIN."
+                )
             except nl.NoonlightClient.Unauthorized as err:
                 # A broker token can expire or be revoked between create and cancel.
                 if attempt == 1 and token_source == "broker":

@@ -1,0 +1,22 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.1
+      - name: Set up Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.13"
+      - name: Install test requirements
+        run: pip install -r requirements_test.txt
+      - name: Run tests
+        # Mocked Noonlight API only: no credentials, no real API calls.
+        run: pytest tests

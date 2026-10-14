@@ -40,8 +40,10 @@ class FakeNoonlight:
         self.status_response = None  # override the cancel response body
         self.alarms = 0
         self.reject_all = False      # every token gets 401
+        self.delay = 0               # seconds before the broker / cancel answer
 
     async def token(self, request):
+        await asyncio.sleep(self.delay)
         body = await request.json()
         self.requests.append((request.path, None, body))
         self.issued += 1
@@ -64,6 +66,7 @@ class FakeNoonlight:
                                   "created_at": "2026-01-01T00:00:00Z"}, status=201)
 
     async def status(self, request):
+        await asyncio.sleep(self.delay)
         body = await request.json()
         self.requests.append((request.path, request.headers.get("Authorization"), body))
         if not self._auth_ok(request):
@@ -265,6 +268,38 @@ def test_token_renewal_exception_fires_failed_event(tmp_path):
             event, data = await h.last_event()
             assert event == "noonlight_alarm_failed" and data["action"] == "cancel"
             assert "renewal failed" in data["error"]
+    run(go())
+
+
+def test_cancel_request_timeout_fires_failed_event(tmp_path):
+    async def go():
+        async with Harness(tmp_path) as h:
+            n = await h.integration()
+            assert await n.create_alarm(alarm_types=["police"])
+            alarm_id = await created_id(h)
+            h.fake.delay = 2
+            with patch.object(integ, "CANCEL_REQUEST_TIMEOUT", timedelta(seconds=0.3)):
+                assert not await n.cancel_alarm(alarm_id=alarm_id)
+            event, data = await h.last_event()
+            assert event == "noonlight_alarm_failed" and data["action"] == "cancel"
+            assert "did not answer" in data["error"]
+            assert alarm_id in n._alarm_routes  # kept for a retry
+    run(go())
+
+
+def test_token_renewal_timeout_fires_failed_event(tmp_path):
+    async def go():
+        async with Harness(tmp_path) as h:
+            h.fake.token_lifetime = timedelta(minutes=1)  # forces a renewal at cancel
+            n = await h.integration()
+            assert await n.create_alarm(alarm_types=["police"])
+            alarm_id = await created_id(h)
+            h.fake.delay = 2
+            with patch.object(integ, "CANCEL_REQUEST_TIMEOUT", timedelta(seconds=0.3)):
+                assert not await n.cancel_alarm(alarm_id=alarm_id)
+            assert not h.fake.status_posts()
+            event, data = await h.last_event()
+            assert event == "noonlight_alarm_failed" and "renewal failed" in data["error"]
     run(go())
 
 
