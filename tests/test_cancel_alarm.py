@@ -360,6 +360,34 @@ def test_stale_routes_are_pruned_on_load(tmp_path):
     run(go())
 
 
+def test_unknown_alarm_id_fails_closed_without_contacting_noonlight(tmp_path):
+    async def go():
+        async with Harness(tmp_path) as h:
+            n = await h.integration()  # configured for production
+            assert await n.create_alarm(alarm_types=["police"])
+            before = len(h.fake.requests)
+            assert not await n.cancel_alarm(alarm_id="not-an-alarm-id")
+            assert len(h.fake.requests) == before  # nothing sent anywhere
+            event, data = await h.last_event()
+            assert event == "noonlight_alarm_failed" and "Unknown Noonlight alarm_id" in data["error"]
+    run(go())
+
+
+def test_expired_route_fails_closed(tmp_path):
+    async def go():
+        async with Harness(tmp_path) as h:
+            n = await h.integration()
+            assert await n.create_alarm(alarm_types=["police"])
+            alarm_id = await created_id(h)
+            n._alarm_routes[alarm_id]["created_at"] = (dt_util.utcnow() - timedelta(hours=25)).isoformat()
+            await n._async_save_alarm_routes()
+            n2 = await h.integration()  # restart prunes it
+            before = len(h.fake.requests)
+            assert not await n2.cancel_alarm(alarm_id=alarm_id)
+            assert len(h.fake.requests) == before
+    run(go())
+
+
 def test_no_alarm_fails(tmp_path):
     async def go():
         async with Harness(tmp_path) as h:

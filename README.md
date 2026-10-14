@@ -358,7 +358,7 @@ data:
 
 Disarming an alarm panel (Alarmo, manual, etc.) does **not** cancel a Noonlight dispatch. They are separate operations; only this action, confirmed by `noonlight_alarm_canceled`, cancels with Noonlight.
 
-**Environment and restarts.** Each created alarm's route (API endpoint, token endpoint, environment) is stored in Home Assistant's `.storage`, **without tokens**, and kept for 24 hours. A cancel always goes to the environment that created the alarm, even after a restart or a change to the configured endpoint. Alarms older than 24 hours, or not created by this integration, use the configured endpoint (a warning is logged).
+**Environment and restarts.** Each created alarm's route (API endpoint, token endpoint, environment) is stored in Home Assistant's `.storage`, **without tokens**, and kept for 24 hours. A cancel always goes to the environment that created the alarm, even after a restart or a change to the configured endpoint. An `alarm_id` this integration did not create in the last 24 hours (a typo, a stale ID, an alarm from another system) fails closed: nothing is sent to Noonlight and `noonlight_alarm_failed` explains why.
 
 **Tokens.**
 

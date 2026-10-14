@@ -790,7 +790,9 @@ class NoonlightIntegration:
 
         Posts ``{"status": "CANCELED", "pin": ...}`` to the Dispatch API
         ``/alarms/{id}/status`` endpoint of the environment that created the
-        alarm.
+        alarm. Only alarms this integration created in the last
+        ALARM_ROUTE_TTL can be cancelled; any other ID fails closed without
+        contacting Noonlight.
 
         Args:
             alarm_id: Alarm to cancel. Callers should always pass it (from
@@ -819,19 +821,15 @@ class NoonlightIntegration:
         pin = pin or self.config.get(CONF_PIN)
         override = server_token_override.strip() if isinstance(server_token_override, str) else ""
 
+        # Only alarms this integration created (within ALARM_ROUTE_TTL) can be
+        # cancelled. There is no fallback to the configured endpoint: a typo'd
+        # or stale ID must never be sent to an environment it did not come from.
         route = self._alarm_routes.get(alarm_id) if alarm_id else None
-        api_endpoint = ((route or {}).get("api_endpoint") or self.config.get(CONF_API_ENDPOINT, "")).strip()
+        api_endpoint = ((route or {}).get("api_endpoint") or "").strip()
         token_endpoint = (route or {}).get("token_endpoint") or self.config.get(CONF_TOKEN_ENDPOINT)
+        token_source = (route or {}).get("token_source", "broker")
         is_sandbox = "api-sandbox.noonlight.com" in api_endpoint
         is_production = "api.noonlight.com" in api_endpoint and not is_sandbox
-        if route:
-            token_source = route.get("token_source", "broker")
-        else:
-            token_source = (
-                "server_override" if is_sandbox
-                else "dev" if self.config.get(CONF_DEV_TOKEN)
-                else "broker"
-            )
         event_base = {
             "alarm_id": alarm_id,
             "api_endpoint": api_endpoint,
@@ -848,16 +846,17 @@ class NoonlightIntegration:
 
         if not alarm_id:
             return fail("No Noonlight alarm to cancel: no alarm_id given and none created since start.")
+        if route is None:
+            return fail(
+                f"Unknown Noonlight alarm_id {alarm_id}: no alarm with this ID was created "
+                f"by this integration in the last {int(ALARM_ROUTE_TTL.total_seconds() // 3600)} "
+                "hours. Nothing was sent to Noonlight. Check the ID, or cancel by answering "
+                "Noonlight's call or text with your PIN."
+            )
         if not explicit_id:
             _LOGGER.warning(
                 "noonlight.cancel_alarm called without alarm_id; cancelling the most "
                 "recently created alarm %s. Pass alarm_id explicitly.", alarm_id,
-            )
-        if route is None:
-            _LOGGER.warning(
-                "No stored route for Noonlight alarm %s (older than %s or not created "
-                "by this integration); using the configured endpoint %s.",
-                alarm_id, ALARM_ROUTE_TTL, api_endpoint,
             )
         if is_production and override:
             return fail(
