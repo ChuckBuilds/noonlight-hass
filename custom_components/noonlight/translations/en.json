@@ -5,6 +5,9 @@
       "already_configured": "Already Configured: Only 1 instance of Noonlight Enhanced permitted",
       "reconfigure_successful": "Reconfigure Successful"
     },
+    "error": {
+      "invalid_phone": "Enter the phone number with its country code, e.g. 15555555555 for a US number. Noonlight rejects numbers without it."
+    },
     "step": {
       "user": {
         "title": "Configure the Noonlight Enhanced",
@@ -62,6 +65,26 @@
         "data": {
           "latitude": "Latitude",
           "longitude": "Longitude"
+        }
+      },
+      "v2_dispatch": {
+        "data": {
+          "phone": "Phone",
+          "phone2": "Secondary Contact Phone"
+        },
+        "data_description": {
+          "phone": "Include the country code, e.g. 15555555555 for a US number.",
+          "phone2": "Include the country code, e.g. 15555555555 for a US number."
+        }
+      },
+      "reconfig_v2_dispatch": {
+        "data": {
+          "phone": "Phone",
+          "phone2": "Secondary Contact Phone"
+        },
+        "data_description": {
+          "phone": "Include the country code, e.g. 15555555555 for a US number.",
+          "phone2": "Include the country code, e.g. 15555555555 for a US number."
         }
       }
     }
