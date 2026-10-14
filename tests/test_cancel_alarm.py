@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import homeassistant.util.dt as dt_util  # noqa: E402
 from homeassistant import core  # noqa: E402
+from homeassistant.core import callback  # noqa: E402
 
 from custom_components import noonlight as integ  # noqa: E402
 
@@ -102,8 +103,14 @@ class Harness:
         self.patch = patch.object(integ, "async_get_clientsession", lambda hass: self.session)
         self.patch.start()
         self.hass = core.HomeAssistant(str(self.tmp_path))
+        # @callback: runs in the event loop in firing order. A plain function
+        # would run in a thread pool and could record events out of order.
+        @callback
+        def record(event):
+            self.events.append((event.event_type, dict(event.data)))
+
         for event in ("noonlight_alarm_created", "noonlight_alarm_canceled", "noonlight_alarm_failed"):
-            self.hass.bus.async_listen(event, lambda e: self.events.append((e.event_type, dict(e.data))))
+            self.hass.bus.async_listen(event, record)
         return self
 
     async def __aexit__(self, *exc):
