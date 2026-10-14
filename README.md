@@ -342,10 +342,11 @@ Cancels an active alarm through the Dispatch API (`POST /alarms/{id}/status` wit
 
 | Field | Default | Notes |
 |---|---|---|
-| `alarm_id` | Most recently created alarm | The `alarm_id` from `noonlight_alarm_created` |
+| `alarm_id` | Most recently created alarm | **Always pass it.** Use the `alarm_id` from `noonlight_alarm_created` |
 | `pin` | Configured PIN | Noonlight verifies it before cancelling |
+| `server_token_override` | - | Only to cancel a sandbox alarm created before a restart. Rejected for production |
 
-The cancel is sent to the same endpoint, with the same token, that created the alarm, so a sandbox alarm is cancelled in the sandbox and a production alarm in production. This routing is kept in memory. After a Home Assistant restart, production alarms are cancelled with a freshly renewed token. Sandbox alarms created before the restart cannot be cancelled from Home Assistant, because the sandbox server token is not stored, and the call fails closed.
+**Always supply `alarm_id` explicitly.** Relying on "the most recently created alarm" can cancel the wrong one when incidents overlap, and is empty after a restart. Calls without it log a warning.
 
 ```yaml
 action: noonlight.cancel_alarm
@@ -353,7 +354,19 @@ data:
   alarm_id: "{{ trigger.event.data.alarm_id }}"
 ```
 
-Success fires `noonlight_alarm_canceled`; failure fires `noonlight_alarm_failed` with `action: cancel`. If the cancel fails, the alarm may still be active: answer Noonlight's call or text and give your PIN.
+**Events.** `noonlight_alarm_canceled` fires only when Noonlight confirms the cancellation (a 2xx response with `status: CANCELED`). Anything else, including token problems, fires `noonlight_alarm_failed` with `action: cancel` and the error. A failed cancel means the alarm may still be active: answer Noonlight's call or text and give your PIN.
+
+Disarming an alarm panel (Alarmo, manual, etc.) does **not** cancel a Noonlight dispatch. They are separate operations; only this action, confirmed by `noonlight_alarm_canceled`, cancels with Noonlight.
+
+**Environment and restarts.** Each created alarm's route (API endpoint, token endpoint, environment) is stored in Home Assistant's `.storage`, **without tokens**, and kept for 24 hours. A cancel always goes to the environment that created the alarm, even after a restart or a change to the configured endpoint. Alarms older than 24 hours, or not created by this integration, use the configured endpoint (a warning is logged).
+
+**Tokens.**
+
+| Alarm created with | Cancel uses |
+|---|---|
+| Production (token broker) | The same token while it has more than 5 minutes left, otherwise a token renewed through the token endpoint that created the alarm. A `401` renews once and retries once |
+| Dev token | The configured dev token |
+| Sandbox server token | The same token. After a restart it is gone: pass `server_token_override`, or the call fails closed without contacting Noonlight |
 
 ## Integration Information Entity
 

@@ -99,14 +99,18 @@ create_alarm:
 cancel_alarm:
   name: Cancel Alarm
   description: >-
-    Cancel an active Noonlight alarm. Uses the same endpoint (sandbox or
-    production) and token that created it. Fires noonlight_alarm_canceled on
-    success or noonlight_alarm_failed (action: cancel) on failure.
+    Cancel an active Noonlight alarm in the environment (sandbox or
+    production) that created it. Fires noonlight_alarm_canceled only when
+    Noonlight confirms the cancellation, otherwise noonlight_alarm_failed
+    (action: cancel).
 
   fields:
     alarm_id:
       name: Alarm ID
-      description: Alarm to cancel. Defaults to the most recently created alarm.
+      description: >-
+        Alarm to cancel, from the noonlight_alarm_created event. Always pass it
+        in automations; if omitted, the most recently created alarm is used,
+        which can be the wrong one when incidents overlap.
       required: false
       selector:
         text:
@@ -114,6 +118,16 @@ cancel_alarm:
     pin:
       name: PIN
       description: PIN Noonlight verifies before cancelling. Defaults to the configured PIN.
+      required: false
+      selector:
+        text:
+          type: password
+
+    server_token_override:
+      name: Sandbox Server Token Override
+      description: >-
+        Only needed to cancel a SANDBOX alarm created before Home Assistant
+        restarted (sandbox tokens are not stored). Rejected for production.
       required: false
       selector:
         text:
