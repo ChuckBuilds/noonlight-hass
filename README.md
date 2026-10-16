@@ -344,11 +344,11 @@ Cancels an active alarm through the Dispatch API (`POST /alarms/{id}/status` wit
 
 | Field | Default | Notes |
 |---|---|---|
-| `alarm_id` | Most recently created alarm | **Always pass it.** Use the `alarm_id` from `noonlight_alarm_created` |
+| `alarm_id` | **Required** | The `alarm_id` from `noonlight_alarm_created` |
 | `pin` | Configured PIN | Noonlight verifies it before cancelling |
 | `server_token_override` | - | Only to cancel a sandbox alarm created before a restart. Rejected for production |
 
-**Always supply `alarm_id` explicitly.** Relying on "the most recently created alarm" can cancel the wrong one when incidents overlap, and is empty after a restart. Calls without it log a warning.
+`alarm_id` is required. A call without it fails (`noonlight_alarm_failed`) and sends nothing to Noonlight, rather than guessing which incident to cancel.
 
 ```yaml
 action: noonlight.cancel_alarm
@@ -360,7 +360,9 @@ data:
 
 Disarming an alarm panel (Alarmo, manual, etc.) does **not** cancel a Noonlight dispatch. They are separate operations; only this action, confirmed by `noonlight_alarm_canceled`, cancels with Noonlight.
 
-**Environment and restarts.** Each created alarm's route (API endpoint, token endpoint, environment) is stored in Home Assistant's `.storage`, **without tokens**, and kept for 24 hours. A cancel always goes to the environment that created the alarm, even after a restart or a change to the configured endpoint. An `alarm_id` this integration did not create in the last 24 hours (a typo, a stale ID, an alarm from another system) fails closed: nothing is sent to Noonlight and `noonlight_alarm_failed` explains why.
+**Environment and restarts.** Each created alarm's route (API endpoint, token endpoint, environment) is stored in Home Assistant's `.storage`, **without tokens**, and kept for 24 hours. A cancel always goes to the environment that created the alarm, even after a restart or a change to the configured endpoint. An `alarm_id` this integration did not create in the last 24 hours (a typo, a stale ID, an alarm from another system) fails closed: nothing is sent to Noonlight and `noonlight_alarm_failed` explains why. The 24 hours are enforced at cancel time too, not only on restart.
+
+If the route cannot be saved, the alarm is still created: `noonlight_alarm_created` carries `restart_safe_cancel: false`, a warning is logged, and a Repairs issue explains that cancelling after a restart is unavailable. It clears once saving works again.
 
 **Tokens.**
 

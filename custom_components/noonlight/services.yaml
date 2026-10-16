@@ -108,12 +108,10 @@ cancel_alarm:
     alarm_id:
       name: Alarm ID
       description: >-
-        Alarm to cancel, from the noonlight_alarm_created event. Always pass it
-        in automations; if omitted, the most recently created alarm is used,
-        which can be the wrong one when incidents overlap. IDs not created by
-        this integration in the last 24 hours are refused without contacting
-        Noonlight.
-      required: false
+        Alarm to cancel, from the noonlight_alarm_created event. Required. IDs
+        not created by this integration in the last 24 hours are refused
+        without contacting Noonlight.
+      required: true
       selector:
         text:
 

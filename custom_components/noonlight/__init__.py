@@ -41,7 +41,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 
@@ -94,6 +98,10 @@ WEBHOOK_ID = "noonlight_dispatch_events"
 ALARM_ROUTE_TTL = timedelta(hours=24)
 ALARM_ROUTES_STORAGE_KEY = "noonlight.alarm_routes"
 ALARM_ROUTES_STORAGE_VERSION = 1
+
+# Repairs issue shown while cancel routes cannot be saved / loaded, i.e. while
+# cancelling after a restart is not possible.
+ISSUE_ROUTES_NOT_SAVED = "alarm_routes_not_saved"
 
 # A stored broker token with less than this left is renewed before a cancel.
 CANCEL_TOKEN_MIN_REMAINING = timedelta(minutes=5)
@@ -240,9 +248,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """Cancel a Noonlight alarm from a Home Assistant service call.
 
         This is the Home Assistant service entry point for automations/scripts:
-        ``noonlight.cancel_alarm``. Automations should always pass ``alarm_id``
-        (from ``noonlight_alarm_created``); without it the most recently
-        created alarm is used. The PIN defaults to the configured PIN.
+        ``noonlight.cancel_alarm``. ``alarm_id`` (from ``noonlight_alarm_created``)
+        is required; the PIN defaults to the configured PIN.
         """
         await noonlight_integration.cancel_alarm(
             alarm_id=call.data.get("alarm_id"),
@@ -704,7 +711,9 @@ class NoonlightIntegration:
                 "alarm_id": getattr(self._alarm, "id", None),
                 "status": getattr(self._alarm, "status", None),
             }
-            await self._async_remember_alarm_route(
+            # Restart-safe cancel needs the route on disk. Creating the alarm
+            # never depends on that; the event says whether it is available.
+            event_data["restart_safe_cancel"] = await self._async_remember_alarm_route(
                 self._alarm.id,
                 api_endpoint=api_endpoint,
                 token_endpoint=token_endpoint,
@@ -742,6 +751,7 @@ class NoonlightIntegration:
         except Exception:
             _LOGGER.exception("Could not load stored Noonlight alarm routes")
             self._alarm_routes = {}
+            self._set_routes_issue(True)
         if self._prune_alarm_routes():
             await self._async_save_alarm_routes()
 
@@ -758,12 +768,40 @@ class NoonlightIntegration:
             self._alarm_tokens.pop(alarm_id, None)
         return bool(stale)
 
+    def _set_routes_issue(self, active):
+        """Show / clear the Repairs issue for unavailable restart-safe cancel."""
+        if active:
+            async_create_issue(
+                self.hass,
+                DOMAIN,
+                ISSUE_ROUTES_NOT_SAVED,
+                is_fixable=False,
+                is_persistent=False,
+                severity=IssueSeverity.WARNING,
+                translation_key=ISSUE_ROUTES_NOT_SAVED,
+            )
+        else:
+            async_delete_issue(self.hass, DOMAIN, ISSUE_ROUTES_NOT_SAVED)
+
     async def _async_save_alarm_routes(self):
-        """Persist routes. Never raises: a storage error must not affect dispatch."""
+        """Persist routes. Returns True if saved.
+
+        Never raises: a storage error must not affect dispatch. A failure is
+        logged and raised as a Repairs issue (cancelling after a restart is
+        unavailable until a save succeeds again).
+        """
         try:
             await self._routes_store.async_save(self._alarm_routes)
         except Exception:
-            _LOGGER.exception("Could not save Noonlight alarm routes")
+            _LOGGER.warning(
+                "Could not save Noonlight alarm routes: alarms are still created, but "
+                "cancelling them after a Home Assistant restart is unavailable",
+                exc_info=True,
+            )
+            self._set_routes_issue(True)
+            return False
+        self._set_routes_issue(False)
+        return True
 
     async def _async_remember_alarm_route(
         self, alarm_id, *, api_endpoint, token_endpoint, environment, token_source
@@ -771,7 +809,9 @@ class NoonlightIntegration:
         """Record where and how an alarm was created, for a later cancel.
 
         The route (no token) is persisted; the token stays in memory only.
-        Never raises, so it cannot interfere with reporting a created alarm.
+        Returns True if the route was saved to disk (cancel survives a
+        restart). Never raises, so it cannot interfere with reporting a
+        created alarm.
         """
         try:
             self._alarm_routes[alarm_id] = {
@@ -786,11 +826,13 @@ class NoonlightIntegration:
                 self.access_token_expiry if token_source == "broker" else None,
             )
             self._prune_alarm_routes()
-            await self._async_save_alarm_routes()
+            return await self._async_save_alarm_routes()
         except Exception:
             _LOGGER.exception("Could not record cancel route for Noonlight alarm %s", alarm_id)
+            self._set_routes_issue(True)
+            return False
 
-    async def cancel_alarm(self, alarm_id=None, pin=None, server_token_override=None):
+    async def cancel_alarm(self, alarm_id, pin=None, server_token_override=None):
         """Cancel a Noonlight alarm.
 
         Posts ``{"status": "CANCELED", "pin": ...}`` to the Dispatch API
@@ -800,9 +842,9 @@ class NoonlightIntegration:
         contacting Noonlight.
 
         Args:
-            alarm_id: Alarm to cancel. Callers should always pass it (from
-                ``noonlight_alarm_created``); without it the most recently
-                created alarm is used.
+            alarm_id: Alarm to cancel, from ``noonlight_alarm_created``.
+                Required: a missing ID fails rather than guessing which
+                incident to cancel.
             pin: PIN verified by Noonlight. Defaults to the configured PIN.
             server_token_override: Sandbox server token, only needed to cancel
                 a sandbox alarm created before a restart. Rejected for
@@ -821,14 +863,16 @@ class NoonlightIntegration:
         (2xx with status CANCELED). Anything else fires
         ``noonlight_alarm_failed`` with ``action: cancel``. Never raises.
         """
-        explicit_id = bool(alarm_id)
-        alarm_id = alarm_id or getattr(self._alarm, "id", None)
         pin = pin or self.config.get(CONF_PIN)
         override = server_token_override.strip() if isinstance(server_token_override, str) else ""
 
         # Only alarms this integration created (within ALARM_ROUTE_TTL) can be
         # cancelled. There is no fallback to the configured endpoint: a typo'd
         # or stale ID must never be sent to an environment it did not come from.
+        # Expire routes here too, not only on load / create, so a long-running
+        # Home Assistant never uses a route past its TTL.
+        if self._prune_alarm_routes():
+            await self._async_save_alarm_routes()
         route = self._alarm_routes.get(alarm_id) if alarm_id else None
         api_endpoint = ((route or {}).get("api_endpoint") or "").strip()
         token_endpoint = (route or {}).get("token_endpoint") or self.config.get(CONF_TOKEN_ENDPOINT)
@@ -850,18 +894,16 @@ class NoonlightIntegration:
             return False
 
         if not alarm_id:
-            return fail("No Noonlight alarm to cancel: no alarm_id given and none created since start.")
+            return fail(
+                "noonlight.cancel_alarm needs an alarm_id (from noonlight_alarm_created). "
+                "Nothing was sent to Noonlight."
+            )
         if route is None:
             return fail(
                 f"Unknown Noonlight alarm_id {alarm_id}: no alarm with this ID was created "
                 f"by this integration in the last {int(ALARM_ROUTE_TTL.total_seconds() // 3600)} "
                 "hours. Nothing was sent to Noonlight. Check the ID, or cancel by answering "
                 "Noonlight's call or text with your PIN."
-            )
-        if not explicit_id:
-            _LOGGER.warning(
-                "noonlight.cancel_alarm called without alarm_id; cancelling the most "
-                "recently created alarm %s. Pass alarm_id explicitly.", alarm_id,
             )
         if is_production and override:
             return fail(

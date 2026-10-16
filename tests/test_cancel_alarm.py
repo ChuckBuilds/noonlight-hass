@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import homeassistant.util.dt as dt_util  # noqa: E402
 from homeassistant import core  # noqa: E402
 from homeassistant.core import callback  # noqa: E402
+from homeassistant.helpers import issue_registry as ir  # noqa: E402
 
 from custom_components import noonlight as integ  # noqa: E402
 
@@ -103,6 +104,7 @@ class Harness:
         self.patch = patch.object(integ, "async_get_clientsession", lambda hass: self.session)
         self.patch.start()
         self.hass = core.HomeAssistant(str(self.tmp_path))
+        await ir.async_load(self.hass)
         # @callback: runs in the event loop in firing order. A plain function
         # would run in a thread pool and could record events out of order.
         @callback
@@ -434,21 +436,66 @@ def test_no_alarm_fails(tmp_path):
     async def go():
         async with Harness(tmp_path) as h:
             n = await h.integration()
-            assert not await n.cancel_alarm()
+            assert not await n.cancel_alarm(alarm_id=None)
             event, data = await h.last_event()
             assert event == "noonlight_alarm_failed" and data["action"] == "cancel"
     run(go())
 
 
-def test_missing_alarm_id_uses_latest_and_warns(tmp_path, caplog):
+def test_missing_alarm_id_fails_without_contacting_noonlight(tmp_path):
+    async def go():
+        async with Harness(tmp_path) as h:
+            n = await h.integration()
+            assert await n.create_alarm(alarm_types=["police"])  # an alarm exists
+            before = len(h.fake.requests)
+            assert not await n.cancel_alarm(alarm_id=None)
+            assert not await n.cancel_alarm(alarm_id="")
+            assert len(h.fake.requests) == before  # never guesses the latest alarm
+            event, data = await h.last_event()
+            assert event == "noonlight_alarm_failed" and "needs an alarm_id" in data["error"]
+    run(go())
+
+
+def test_route_expires_while_home_assistant_keeps_running(tmp_path):
     async def go():
         async with Harness(tmp_path) as h:
             n = await h.integration()
             assert await n.create_alarm(alarm_types=["police"])
-            assert await n.cancel_alarm()
-            assert h.fake.status_posts()[-1][0].endswith(f"/alarms/{(await created_id(h))}/status")
+            alarm_id = await created_id(h)
+            # No restart, no new alarm: only cancel_alarm itself can expire it.
+            n._alarm_routes[alarm_id]["created_at"] = (dt_util.utcnow() - timedelta(hours=25)).isoformat()
+            before = len(h.fake.requests)
+            assert not await n.cancel_alarm(alarm_id=alarm_id)
+            assert len(h.fake.requests) == before
+            assert alarm_id not in n._alarm_routes
+            event, data = await h.last_event()
+            assert event == "noonlight_alarm_failed" and "Unknown Noonlight alarm_id" in data["error"]
     run(go())
-    assert "without alarm_id" in caplog.text
+
+
+def test_route_save_failure_still_creates_alarm_and_warns(tmp_path, caplog):
+    async def go():
+        async with Harness(tmp_path) as h:
+            n = await h.integration()
+
+            async def broken_save(data):
+                raise OSError("disk full")
+            with patch.object(n._routes_store, "async_save", broken_save):
+                assert await n.create_alarm(alarm_types=["police"])  # still created
+            await h.hass.async_block_till_done()
+            created = [d for t, d in h.events if t == "noonlight_alarm_created"][-1]
+            assert created["restart_safe_cancel"] is False
+            issues = ir.async_get(h.hass)
+            assert issues.async_get_issue("noonlight", "alarm_routes_not_saved") is not None
+            # cancel still works until a restart (route is in memory)
+            assert await n.cancel_alarm(alarm_id=created["alarm_id"])
+            # next successful save clears the issue and the flag is True again
+            assert await n.create_alarm(alarm_types=["police"])
+            await h.hass.async_block_till_done()
+            assert [d for t, d in h.events if t == "noonlight_alarm_created"][-1]["restart_safe_cancel"] is True
+            assert issues.async_get_issue("noonlight", "alarm_routes_not_saved") is None
+    run(go())
+    assert "cancelling them after a Home Assistant restart is unavailable" in caplog.text
 
 
 def test_failed_cancel_keeps_the_route_for_a_retry(tmp_path):
