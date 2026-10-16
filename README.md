@@ -237,6 +237,8 @@ You may be prompted for:
 * Phone number
 * PIN
 * Secondary contact information
+
+Phone numbers must include the country code, as digits only, e.g. `15555555555` for a US number. Spaces, dashes, parentheses and `+` are removed. Setup rejects anything that is not 11-15 ASCII digits, which catches a missing country code before an emergency dispatch fails. It checks the format only, not whether the country code or the number is valid.
 * Additional instructions
 
 ### Dispatch API Endpoints

@@ -55,6 +55,37 @@ STATES = [
     "WI", "WV", "WY",
 ]
 
+# Characters people commonly type in phone numbers. Noonlight wants digits only.
+PHONE_FORMATTING_CHARACTERS = " -().+"
+
+
+def _validate_phones(user_input: dict[str, Any]) -> dict[str, str]:
+    """Normalize the contact phone numbers and return form errors.
+
+    Noonlight's Dispatch API rejects a number without its country code (for
+    example 8135550100) with "phone should be a supported phone format", so
+    alarms fail at dispatch time. Catch that here instead: strip common
+    formatting and require 11-15 ASCII digits, e.g. 18135550100.
+
+    This checks the format only. It does not establish that the country code
+    or the number itself is valid.
+
+    Blank values are allowed because these fields are optional.
+    """
+    errors = {}
+    for key in (CONF_PHONE, CONF_PHONE2):
+        value = user_input.get(key)
+        if not value:
+            continue
+        digits = "".join(ch for ch in value if ch not in PHONE_FORMATTING_CHARACTERS)
+        # isdigit() alone also accepts non-ASCII numerals (e.g. Arabic-Indic or
+        # fullwidth digits); Noonlight needs plain 0-9.
+        if digits.isascii() and digits.isdigit() and 11 <= len(digits) <= 15:
+            user_input[key] = digits
+        else:
+            errors[key] = "invalid_phone"
+    return errors
+
 
 async def _async_build_noonlight_schema(
     hass: HomeAssistant, user_input: dict | None, default_dict: dict
@@ -496,6 +527,9 @@ class NoonlightConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._errors = {}
 
         if user_input is not None:
+            self._errors = _validate_phones(user_input)
+
+        if user_input is not None and not self._errors:
             # Store optional dispatch metadata and create the config entry.
             #
             # This is the final interactive setup step for a new config entry.
@@ -679,6 +713,9 @@ class NoonlightConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._errors = {}
 
         if user_input is not None:
+            self._errors = _validate_phones(user_input)
+
+        if user_input is not None and not self._errors:
             # Store updated optional dispatch metadata.
             self._data.update(user_input)
 
